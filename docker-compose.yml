@@ -6,6 +6,7 @@ services:
       AUTH_USER: ${AUTH_USER:-admin}
       AUTH_PASSWORD: ${AUTH_PASSWORD:?set AUTH_PASSWORD in .env}
       POLL_INTERVAL: ${POLL_INTERVAL:-5}
+      MODE: ${MODE:-control}
     ports:
       - "18899:18899"            # dongle (AT+CLDSRVHOST1=<server IP>,18899,TCP); cannot go through the tunnel
       - "127.0.0.1:8090:8090"    # dashboard for an SSH tunnel; the public way in is cloudflared below

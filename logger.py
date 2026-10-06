@@ -9,11 +9,12 @@ https://github.com/groove-max/ha-eybond-local (eybond_g_ascii).
 Usage: python logger.py [poll_interval_seconds]
 Dashboard: http://127.0.0.1:8090/
 
-Environment: LISTEN_PORT, HTTP_HOST, HTTP_PORT, DB_PATH, POLL_INTERVAL, AUTH_USER, AUTH_PASSWORD.
+Environment: MODE, LISTEN_PORT, HTTP_HOST, HTTP_PORT, DB_PATH, POLL_INTERVAL, AUTH_USER, AUTH_PASSWORD.
 The dashboard can change inverter settings, so it only listens beyond localhost when
 AUTH_PASSWORD is set (HTTP Basic auth; put HTTPS in front of it on a public server).
 """
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -34,6 +35,10 @@ HTTP_HOST = os.environ.get('HTTP_HOST', '127.0.0.1')
 HTTP_PORT = int(os.environ.get('HTTP_PORT', 8090))
 AUTH_USER = os.environ.get('AUTH_USER', 'admin')
 AUTH_PASSWORD = os.environ.get('AUTH_PASSWORD', '')
+# 'monitor': readings and settings are shown, nothing can be written to the inverter.
+# 'control': settings can also be changed from the dashboard.
+MODE = os.environ.get('MODE', 'control').strip().lower()
+CAN_WRITE = MODE == 'control'
 HISTORY_POINTS = 600
 INDEX_PATH = Path(__file__).with_name('index.html')
 POLL_INTERVAL = float(os.environ.get('POLL_INTERVAL', 2.0))
@@ -108,6 +113,12 @@ SETTINGS = [
 SETTINGS_BY_KEY = {s['key']: s for s in SETTINGS}
 SETTINGS_EVERY = 3  # poll cycles between two setting reads; one full pass takes a few minutes
 
+WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+WS_TIMEOUT = 5.0  # a browser that stops reading must not stall the polling loop for longer
+ws_clients = {}  # socket -> send lock, for every open dashboard WebSocket
+ws_clients_lock = threading.Lock()
+last_reading = None  # newest stored reading, sent to a dashboard as soon as it connects
+
 last_odd_reply = float('-inf')  # monotonic time of the last logged unparseable GPDAT0 reply
 setting_values = {}  # key -> {'raw': str, 'ts': int}; shared with the dashboard thread
 writes = queue.Queue()  # (setting, raw value, result dict, done event) from the dashboard thread
@@ -177,6 +188,55 @@ class Dongle:
         return reply.decode('ascii', 'replace').strip('\r\n ').lstrip('(')
 
 
+def ws_frame(opcode: int, payload: bytes) -> bytes:
+    head = bytes([0x80 | opcode])
+    if len(payload) < 126:
+        return head + bytes([len(payload)]) + payload
+    if len(payload) < 65536:
+        return head + bytes([126]) + struct.pack('>H', len(payload)) + payload
+    return head + bytes([127]) + struct.pack('>Q', len(payload)) + payload
+
+
+def ws_parse(buf: bytes) -> tuple[int, bytes, bytes] | None:
+    """Split one masked client frame off the buffer: (opcode, payload, rest), or None if incomplete."""
+    if len(buf) < 2:
+        return None
+    length, offset = buf[1] & 0x7F, 2
+    if length == 126:
+        if len(buf) < 4:
+            return None
+        length, offset = struct.unpack('>H', buf[2:4])[0], 4
+    elif length == 127:
+        raise ValueError('frame too large')
+    end = offset + 4 + length
+    if len(buf) < end:
+        return None
+    mask = buf[offset:offset + 4]
+    payload = bytes(b ^ mask[i % 4] for i, b in enumerate(buf[offset + 4:end]))
+    return buf[0] & 0x0F, payload, buf[end:]
+
+
+def ws_send(conn: socket.socket, frame: bytes) -> None:
+    lock = ws_clients.get(conn)
+    if lock is None:
+        return
+    try:
+        with lock:
+            conn.sendall(frame)
+    except OSError:
+        with ws_clients_lock:
+            ws_clients.pop(conn, None)  # its reader thread notices the dead socket and closes it
+
+
+def push(kind: str, data) -> None:
+    """Send an update to every open dashboard."""
+    frame = ws_frame(1, json.dumps({'type': kind, 'data': data}).encode())
+    with ws_clients_lock:
+        clients = list(ws_clients)
+    for conn in clients:
+        ws_send(conn, frame)
+
+
 def read_live(dongle: Dongle) -> dict | None:
     """Decode GPDAT0, keeping whatever fields are readable; odd replies are logged once a minute."""
     global last_odd_reply
@@ -222,7 +282,10 @@ def read_setting(dongle: Dongle, setting: dict) -> str | None:
     reply = dongle.command(setting['command'] + '?' * setting['width'])
     if not reply or reply in ('NAK', 'NOA', 'ERCRC'):
         return None
+    changed = setting_values.get(setting['key'], {}).get('raw') != reply
     setting_values[setting['key']] = {'raw': reply, 'ts': int(time.time())}
+    if changed:
+        push('settings', settings_view())
     return reply
 
 
@@ -242,8 +305,8 @@ def settings_view() -> list[dict]:
     for setting in SETTINGS:
         state = setting_values.get(setting['key'], {})
         raw = state.get('raw')
-        item = {k: setting[k] for k in ('key', 'title', 'type', 'writable')}
-        item.update(raw=raw, ts=state.get('ts'))
+        item = {k: setting[k] for k in ('key', 'title', 'type')}
+        item.update(raw=raw, ts=state.get('ts'), writable=setting['writable'] and CAN_WRITE)
         if setting['type'] == 'enum':
             item['options'] = setting['options']
         else:
@@ -272,6 +335,8 @@ def history(db: sqlite3.Connection, minutes: int) -> list[dict]:
 
 
 class Dashboard(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'  # browsers only accept a WebSocket upgrade over HTTP/1.1
+
     def authorized(self) -> bool:
         """Check HTTP Basic credentials; answers 401 itself when they are missing or wrong."""
         if not AUTH_PASSWORD:
@@ -296,6 +361,8 @@ class Dashboard(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if url.path == '/':
             return self.reply(INDEX_PATH.read_bytes(), 'text/html; charset=utf-8')
+        if url.path == '/ws':
+            return self.websocket()
         if url.path == '/api/settings':
             return self.reply_json(settings_view())
         if url.path not in ('/api/latest', '/api/history'):
@@ -320,6 +387,8 @@ class Dashboard(BaseHTTPRequestHandler):
             return self.send_error(404)
         try:
             body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))))
+            if not CAN_WRITE:
+                return self.reply_json({'error': 'логер працює в режимі лише моніторингу'}, 403)
             setting = SETTINGS_BY_KEY[body['key']]
             if not setting['writable']:
                 raise ValueError('це налаштування лише для читання')
@@ -332,6 +401,49 @@ class Dashboard(BaseHTTPRequestHandler):
             result['cancelled'] = True  # never apply it later, once the user has been told it failed
             return self.reply_json({'error': 'немає зв\'язку з інвертором'}, 502)
         self.reply_json(result, 502 if 'error' in result else 200)
+
+    def websocket(self) -> None:
+        """Upgrade to a WebSocket and keep it open; readings and settings are pushed by push()."""
+        key = self.headers.get('Sec-WebSocket-Key')
+        if not key or self.headers.get('Upgrade', '').lower() != 'websocket':
+            return self.send_error(400)
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        self.send_response(101)
+        self.send_header('Upgrade', 'websocket')
+        self.send_header('Connection', 'Upgrade')
+        self.send_header('Sec-WebSocket-Accept', accept)
+        self.end_headers()
+        self.close_connection = True
+        conn = self.connection
+        conn.settimeout(WS_TIMEOUT)
+        with ws_clients_lock:
+            ws_clients[conn] = threading.Lock()
+        try:
+            if last_reading:
+                ws_send(conn, ws_frame(1, json.dumps({'type': 'reading', 'data': last_reading}).encode()))
+            ws_send(conn, ws_frame(1, json.dumps({'type': 'settings', 'data': settings_view()}).encode()))
+            buf = b''
+            while conn in ws_clients:
+                frame = ws_parse(buf)
+                if frame is None:
+                    try:
+                        chunk = conn.recv(4096)
+                    except TimeoutError:
+                        continue  # idle browser; the loop condition ends this once a send to it has failed
+                    if not chunk:
+                        break
+                    buf += chunk
+                    continue
+                opcode, payload, buf = frame
+                if opcode == 8:  # close
+                    break
+                if opcode == 9:  # ping
+                    ws_send(conn, ws_frame(10, payload))
+        except (OSError, ValueError):
+            pass
+        finally:
+            with ws_clients_lock:
+                ws_clients.pop(conn, None)
 
     def reply_json(self, body, status: int = 200) -> None:
         self.reply(json.dumps(body).encode(), 'application/json', status)
@@ -376,6 +488,7 @@ def accept_loop(srv: socket.socket, incoming: queue.Queue) -> None:
 
 
 def serve(db: sqlite3.Connection, interval: float) -> None:
+    global last_reading
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(('0.0.0.0', LISTEN_PORT))
@@ -409,9 +522,12 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
                         done.set()
                 values = read_live(dongle)
                 if values:
-                    db.execute('INSERT INTO readings (ts, data) VALUES (?, ?)', (int(time.time()), json.dumps(values)))
+                    now = int(time.time())
+                    db.execute('INSERT INTO readings (ts, data) VALUES (?, ?)', (now, json.dumps(values)))
                     db.commit()
                     log(values)
+                    last_reading = {'ts': now, **values}
+                    push('reading', last_reading)
                 unread = [s for s in SETTINGS if s['key'] not in setting_values]
                 if unread:  # first pass after start: one per cycle until the table is complete
                     read_setting(dongle, unread[cycle % len(unread)])
@@ -426,6 +542,8 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
 
 def main() -> None:
     interval = float(sys.argv[1]) if len(sys.argv) > 1 else POLL_INTERVAL
+    if MODE not in ('monitor', 'control'):
+        sys.exit(f'Unknown MODE={MODE!r}: use "monitor" or "control"')
     if not AUTH_PASSWORD and HTTP_HOST not in ('127.0.0.1', 'localhost', '::1'):
         sys.exit('Refusing to expose the dashboard without a password: set AUTH_PASSWORD or HTTP_HOST=127.0.0.1')
     db = sqlite3.connect(DB_PATH)
@@ -434,7 +552,7 @@ def main() -> None:
     db.commit()
     http = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), Dashboard)
     threading.Thread(target=http.serve_forever, daemon=True).start()
-    log(f'dashboard on http://{HTTP_HOST}:{HTTP_PORT}/ ({"password protected" if AUTH_PASSWORD else "no password"})')
+    log(f'dashboard on http://{HTTP_HOST}:{HTTP_PORT}/ ({"password protected" if AUTH_PASSWORD else "no password"}, mode: {MODE})')
     try:
         serve(db, interval)
     except KeyboardInterrupt:

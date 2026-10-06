@@ -243,7 +243,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
   </div>
 
   <div id="tab-settings" hidden>
-    <p class="warn">Зміна записується в інвертор одразу й перевіряється повторним читанням. Невірні напруги заряду можуть пошкодити батарею — змінюйте лише те, що розумієте. <span id="settingsAge"></span></p>
+    <p class="warn"><span id="settingsNote"></span> <span id="settingsAge"></span></p>
     <div class="groups" id="groups"></div>
   </div>
 </main>
@@ -275,6 +275,7 @@ let latest = {};
 let geom = null;
 let settings = [];
 let editing = null; // key of the setting being edited; pauses re-rendering of the list
+let live = false;   // WebSocket is open
 
 const fmt = (v, digits = 0) => v == null ? '—' : v.toLocaleString('uk-UA', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const clock = (ts, seconds) => new Date(ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: seconds ? '2-digit' : undefined });
@@ -320,19 +321,35 @@ function renderFlow() {
   $('loadBar').style.width = Math.min(d.load_pct, 100) + '%';
 }
 
+function applyReading(data) {
+  // a reading can miss fields the inverter garbled: keep the previous values for those
+  latest = { ...latest, ...data };
+  document.querySelectorAll('[data-f]').forEach(el => {
+    const v = data[el.dataset.f];
+    if (v != null) el.textContent = typeof v === 'string' ? v : fmt(v, Number(el.dataset.d));
+  });
+  renderFlow();
+  renderLink();
+}
+
 async function refreshLatest() {
   try {
     const data = await getJson('/api/latest');
-    if (data) {
-      latest = data;
-      document.querySelectorAll('[data-f]').forEach(el => {
-        const v = data[el.dataset.f];
-        if (v != null) el.textContent = typeof v === 'string' ? v : fmt(v, Number(el.dataset.d));
-      });
-      renderFlow();
-    }
+    if (data) applyReading(data);
   } catch (e) { /* logger not running: the link indicator goes stale by itself */ }
   renderLink();
+}
+
+// Live updates come over a WebSocket; while it is down the page falls back to polling.
+function connectLive() {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+  ws.onopen = () => { live = true; };
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'reading') applyReading(msg.data);
+    else if (msg.type === 'settings') { settings = msg.data; if (!editing) renderSettings(); }
+  };
+  ws.onclose = () => { live = false; setTimeout(connectLive, 3000); };
 }
 
 async function refreshHistory() {
@@ -449,6 +466,9 @@ function renderSettings() {
   const byKey = Object.fromEntries(settings.map(s => [s.key, s]));
   const read = settings.filter(s => s.raw != null).length;
   $('settingsAge').textContent = read < settings.length ? `Зчитано ${read} з ${settings.length}.` : '';
+  $('settingsNote').textContent = settings.some(s => s.writable)
+    ? 'Зміна записується в інвертор одразу й перевіряється повторним читанням. Невірні напруги заряду можуть пошкодити батарею — змінюйте лише те, що розумієте.'
+    : 'Логер працює в режимі лише моніторингу: налаштування показано для перегляду. Щоб змінювати їх зі сторінки, запустіть його з MODE=control.';
   $('groups').innerHTML = GROUPS.map(([title, keys]) =>
     `<section class="card group"><h2>${title}</h2>${keys.filter(k => byKey[k]).map(k => settingRow(byKey[k])).join('')}</section>`).join('');
 }
@@ -516,9 +536,10 @@ setTab(store.get('tab') === 'settings' ? 'settings' : 'overview');
 setRange(minutes);
 refreshLatest();
 refreshSettings();
-setInterval(refreshLatest, 2000);
+connectLive();
+setInterval(() => live ? renderLink() : refreshLatest(), 2000);
 setInterval(refreshHistory, 15000);
-setInterval(refreshSettings, 15000);
+setInterval(() => { if (!live) refreshSettings(); }, 15000);
 </script>
 </body>
 </html>
