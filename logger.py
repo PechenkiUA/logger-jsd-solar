@@ -108,6 +108,7 @@ SETTINGS = [
 SETTINGS_BY_KEY = {s['key']: s for s in SETTINGS}
 SETTINGS_EVERY = 3  # poll cycles between two setting reads; one full pass takes a few minutes
 
+last_odd_reply = float('-inf')  # monotonic time of the last logged unparseable GPDAT0 reply
 setting_values = {}  # key -> {'raw': str, 'ts': int}; shared with the dashboard thread
 writes = queue.Queue()  # (setting, raw value, result dict, done event) from the dashboard thread
 
@@ -177,16 +178,27 @@ class Dongle:
 
 
 def read_live(dongle: Dongle) -> dict | None:
+    """Decode GPDAT0, keeping whatever fields are readable; odd replies are logged once a minute."""
+    global last_odd_reply
     reply = dongle.command('GPDAT0')
-    fields = reply.split() if reply else []
-    if len(fields) <= max(LIVE_FIELDS):
+    if reply is None:
         return None
-    try:
-        values = {name: float(fields[i]) for i, name in LIVE_FIELDS.items()}
-    except ValueError:
+    fields = reply.split()
+    values = {}
+    for i, name in LIVE_FIELDS.items():
+        try:
+            values[name] = float(fields[i])
+        except (IndexError, ValueError):
+            pass
+    if len(values) < len(LIVE_FIELDS) and time.monotonic() - last_odd_reply >= 60:
+        last_odd_reply = time.monotonic()
+        log(f'unexpected GPDAT0 reply ({len(values)} of {len(LIVE_FIELDS)} fields readable): {reply!r}')
+    if not values:
         return None
-    values['battery_power_w'] = round(values['battery_voltage_v'] * values['battery_current_a'])
-    values['mode'] = MODES.get(fields[1], fields[1])
+    if 'battery_voltage_v' in values and 'battery_current_a' in values:
+        values['battery_power_w'] = round(values['battery_voltage_v'] * values['battery_current_a'])
+    if len(fields) > 1:
+        values['mode'] = MODES.get(fields[1], fields[1])
     return values
 
 
