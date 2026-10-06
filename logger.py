@@ -117,38 +117,50 @@ class Dongle:
     FC_HEARTBEAT = 1
     FC_PASSTHROUGH = 4
 
-    def __init__(self, conn: socket.socket):
+    def __init__(self, conn: socket.socket, replaced=lambda: False):
         self.conn = conn
+        self.replaced = replaced  # tells whether a newer connection is waiting
+        self.buf = b''
         self.tid = 0
         self.stats = {'ok': 0, 'timeout': 0, 'late': 0, 'slowest_ms': 0}
 
-    def _recv_exact(self, n: int) -> bytes:
-        buf = b''
-        while len(buf) < n:
-            chunk = self.conn.recv(n - len(buf))
-            if not chunk:
-                raise ConnectionError('closed by dongle')
-            buf += chunk
-        return buf
+    def _take_frame(self) -> tuple[int, bytes] | None:
+        if len(self.buf) < 8:
+            return None
+        tid, _, wire_len, _, _ = struct.unpack('>HHHBB', self.buf[:8])
+        end = 6 + wire_len
+        if len(self.buf) < end:
+            return None
+        body, self.buf = self.buf[8:end], self.buf[end:]
+        return tid, body
 
     def request(self, devaddr: int, fcode: int, data: bytes) -> bytes | None:
         """Send one Eybond frame and return the reply payload, or None on timeout."""
         self.tid = (self.tid + 1) & 0xFFFF
         self.conn.sendall(struct.pack('>HHHBB', self.tid, self.DEVCODE, len(data) + 2, devaddr, fcode) + data)
-        self.conn.settimeout(REQUEST_TIMEOUT)
+        self.conn.settimeout(0.5)  # short slices, to notice a replacement connection quickly
         sent = time.monotonic()
-        try:
-            while True:
-                tid, _, wire_len, _, _ = struct.unpack('>HHHBB', self._recv_exact(8))
-                body = self._recv_exact(wire_len - 2)
-                if tid == self.tid:
+        while True:
+            frame = self._take_frame()
+            if frame:
+                if frame[0] == self.tid:
                     self.stats['ok'] += 1
                     self.stats['slowest_ms'] = max(self.stats['slowest_ms'], round((time.monotonic() - sent) * 1000))
-                    return body
+                    return frame[1]
                 self.stats['late'] += 1  # reply to a request that already timed out
-        except socket.timeout:
-            self.stats['timeout'] += 1
-            return None
+                continue
+            if self.replaced():
+                raise ConnectionError('replaced by a new connection')
+            if time.monotonic() - sent >= REQUEST_TIMEOUT:
+                self.stats['timeout'] += 1
+                return None
+            try:
+                chunk = self.conn.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                raise ConnectionError('closed by dongle')
+            self.buf += chunk
 
     def heartbeat(self) -> str | None:
         now = datetime.now()
@@ -204,7 +216,7 @@ def read_setting(dongle: Dongle, setting: dict) -> str | None:
 
 def apply_write(dongle: Dongle, setting: dict, raw: str, result: dict) -> None:
     reply = dongle.command(setting['command'] + raw)
-    print(f"write {setting['command']}{raw}: {reply}", flush=True)
+    log(f"write {setting['command']}{raw}: {reply}")
     if reply != 'ACK':
         result['error'] = 'інвертор не відповів' if reply is None else f'інвертор відхилив значення ({reply})'
         return
@@ -327,16 +339,46 @@ class Dashboard(BaseHTTPRequestHandler):
         pass
 
 
+def log(message: str) -> None:
+    print(datetime.now().strftime('%H:%M:%S'), message, flush=True)
+
+
+def accept_loop(srv: socket.socket, incoming: queue.Queue) -> None:
+    """Hand every new connection to the polling loop and cut the previous one off.
+
+    There is one dongle, so a new connection means the old one is dead even if no FIN arrived.
+    Without this the poller keeps waiting on the dead socket while the dongle gives up on the
+    queued one, and every connection is already closed by the time it gets served.
+    """
+    active = None
+    while True:
+        conn, peer = srv.accept()
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        if active is not None:
+            try:
+                active.shutdown(socket.SHUT_RDWR)  # wakes the poller blocked in recv()
+            except OSError:
+                pass
+        active = conn
+        incoming.put((conn, peer))
+
+
 def serve(db: sqlite3.Connection, interval: float) -> None:
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(('0.0.0.0', LISTEN_PORT))
-    srv.listen(1)
-    print(f'listening on :{LISTEN_PORT}, poll every {interval}s, db {DB_PATH}', flush=True)
+    srv.listen(8)
+    incoming = queue.Queue()
+    threading.Thread(target=accept_loop, args=(srv, incoming), daemon=True).start()
+    log(f'listening on :{LISTEN_PORT}, poll every {interval}s, db {DB_PATH}')
     while True:
-        conn, peer = srv.accept()
-        print(f'dongle connected from {peer[0]}', flush=True)
-        dongle = Dongle(conn)
+        conn, peer = incoming.get()
+        if not incoming.empty():  # already replaced by a newer connection
+            conn.close()
+            continue
+        log(f'dongle connected from {peer[0]}')
+        dongle = Dongle(conn, replaced=lambda: not incoming.empty())
+        connected = time.monotonic()
         last_heartbeat = 0.0
         cycle = 0
         try:
@@ -344,7 +386,7 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
                 cycle += 1
                 started = time.monotonic()
                 if started - last_heartbeat >= HEARTBEAT_INTERVAL / 2:
-                    print(f'heartbeat: {dongle.heartbeat()}, requests: {dongle.stats}', flush=True)
+                    log(f'heartbeat: {dongle.heartbeat()}, requests: {dongle.stats}')
                     last_heartbeat = started
                 while not writes.empty():
                     setting, raw, result, done = writes.get()
@@ -357,7 +399,7 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
                 if values:
                     db.execute('INSERT INTO readings (ts, data) VALUES (?, ?)', (int(time.time()), json.dumps(values)))
                     db.commit()
-                    print(datetime.now().strftime('%H:%M:%S'), values, flush=True)
+                    log(values)
                 unread = [s for s in SETTINGS if s['key'] not in setting_values]
                 if unread:  # first pass after start: one per cycle until the table is complete
                     read_setting(dongle, unread[cycle % len(unread)])
@@ -365,7 +407,7 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
                     read_setting(dongle, SETTINGS[cycle // SETTINGS_EVERY % len(SETTINGS)])
                 time.sleep(max(0.0, interval - (time.monotonic() - started)))
         except (ConnectionError, OSError) as e:
-            print(f'dongle disconnected: {e}', flush=True)
+            log(f'dongle disconnected after {time.monotonic() - connected:.1f}s: {e}, requests: {dongle.stats}')
         finally:
             conn.close()
 
@@ -380,7 +422,7 @@ def main() -> None:
     db.commit()
     http = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT), Dashboard)
     threading.Thread(target=http.serve_forever, daemon=True).start()
-    print(f'dashboard on http://{HTTP_HOST}:{HTTP_PORT}/ ({"password protected" if AUTH_PASSWORD else "no password"})', flush=True)
+    log(f'dashboard on http://{HTTP_HOST}:{HTTP_PORT}/ ({"password protected" if AUTH_PASSWORD else "no password"})')
     try:
         serve(db, interval)
     except KeyboardInterrupt:
