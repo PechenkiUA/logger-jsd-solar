@@ -1,0 +1,4 @@
+.idea/
+.env
+inverter.sqlite*
+__pycache__/

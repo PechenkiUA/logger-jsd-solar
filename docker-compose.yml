@@ -1,0 +1,26 @@
+services:
+  logger:
+    build: .
+    restart: unless-stopped
+    environment:
+      AUTH_USER: ${AUTH_USER:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?set AUTH_PASSWORD in .env}
+      POLL_INTERVAL: ${POLL_INTERVAL:-5}
+    ports:
+      - "18899:18899"            # dongle (AT+CLDSRVHOST1=<server IP>,18899,TCP); cannot go through the tunnel
+      - "127.0.0.1:8090:8090"    # dashboard for an SSH tunnel; the public way in is cloudflared below
+    volumes:
+      - data:/data
+
+  # HTTPS through a Cloudflare Tunnel. In the tunnel's Public Hostname set the service to http://logger:8090
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env}
+    depends_on:
+      - logger
+
+volumes:
+  data:
