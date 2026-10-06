@@ -23,8 +23,25 @@
   --load: #a78bfa;     --load-line: #8f72f0;
   --grid: #5aa9ff;
   --critical: #ef5b5b;
+  --axis: #3a444f;
+  --on-accent: #06261c;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   --display: "Unbounded", system-ui, sans-serif;
   --body: "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+/* "Прилади": deep navy instrument cluster */
+:root[data-theme="gauges"] {
+  --page: #070d18; --surface: #0f1828; --raised: #18243a; --line: #23324d; --axis: #33466a;
+  --text: #eaf0fa; --text-2: #a9b7cc; --muted: #6f819b;
+}
+/* "Світла": daylight, tiles with trends */
+:root[data-theme="tiles"] {
+  color-scheme: light;
+  --page: #eef1f5; --surface: #ffffff; --raised: #f1f4f8; --line: #dfe4ea; --axis: #c3ccd6;
+  --text: #10161d; --text-2: #47525e; --muted: #7a8694;
+  --pv: #c98500; --battery: #17a371; --battery-line: #17a371; --load: #6d4fd8; --load-line: #6d4fd8;
+  --grid: #2a78d6; --critical: #d03b3b; --on-accent: #ffffff;
+  --shadow: 0 8px 24px rgba(16, 22, 29, 0.14);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.45 var(--body); }
@@ -70,6 +87,38 @@ h2 { margin: 0; font: 500 13px var(--display); letter-spacing: 0.02em; }
 .ring-sub { font-size: 13px; fill: var(--text-2); }
 .ring-state { font-size: 12px; fill: var(--battery); }
 
+/* theme picker */
+.themes { display: inline-flex; gap: 6px; }
+.themes button { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: none; color: var(--text-2); padding: 6px 12px 6px 8px; border-radius: 999px; cursor: pointer; font-size: 13px; }
+.themes button i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--sw-ring); background: var(--sw); }
+.themes button[aria-pressed="true"] { border-color: var(--text-2); color: var(--text); }
+@media (max-width: 560px) { .themes button span { display: none; } .themes button { padding: 6px 8px; } }
+
+/* gauges infographic */
+.gauges { padding: 12px; display: flex; justify-content: center; }
+.gauges svg { display: block; width: 100%; max-width: 380px; height: auto; }
+.gauges text { font-family: var(--body); fill: var(--text); }
+.g-track { fill: none; stroke: var(--raised); stroke-width: 14; stroke-linecap: round; }
+.g-fill { fill: none; stroke-width: 14; stroke-linecap: round; transition: stroke-dasharray 0.8s ease; }
+.g-big { font: 600 46px var(--display); }
+.g-unit { font: 500 16px var(--display); fill: var(--text-2); }
+.g-val { font: 500 20px var(--display); }
+.g-lbl { font-size: 13px; fill: var(--text-2); }
+.g-sub { font-size: 12px; fill: var(--muted); }
+.g-end { font-size: 11px; fill: var(--muted); }
+
+/* tiles-with-trend infographic */
+.sparks { padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; }
+@media (max-width: 420px) { .sparks { grid-template-columns: 1fr; } }
+.spark { background: var(--raised); border-radius: 14px; padding: 14px 14px 10px; min-width: 0; }
+.spark .k { display: flex; align-items: center; gap: 7px; color: var(--text-2); font-size: 13px; }
+.spark .k i { width: 8px; height: 8px; border-radius: 50%; }
+.spark .v { margin: 8px 0 10px; font: 500 26px/1 var(--display); white-space: nowrap; }
+.spark .v small { font: 400 13px var(--body); color: var(--muted); }
+.spark svg { display: block; width: 100%; height: 44px; }
+.spark polyline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark .range { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
 /* now panel */
 .now { display: flex; flex-direction: column; gap: 18px; }
 .mode { font: 500 22px/1.2 var(--display); margin-top: 6px; }
@@ -102,12 +151,12 @@ h2 { margin: 0; font: 500 13px var(--display); letter-spacing: 0.02em; }
 .plot svg { display: block; width: 100%; height: 280px; touch-action: pan-y; }
 .plot text { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .gridline { stroke: var(--line); stroke-width: 1; }
-.baseline { stroke: #3a444f; stroke-width: 1; }
+.baseline { stroke: var(--axis); stroke-width: 1; }
 .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.cross { stroke: #3a444f; stroke-width: 1; }
+.cross { stroke: var(--axis); stroke-width: 1; }
 .dot { stroke: var(--surface); stroke-width: 2; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
-.tip { position: absolute; top: 8px; pointer-events: none; min-width: 180px; padding: 10px 12px; background: var(--raised); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); font-size: 13px; }
+.tip { position: absolute; top: 8px; pointer-events: none; min-width: 180px; padding: 10px 12px; background: var(--raised); border-radius: 12px; box-shadow: var(--shadow); font-size: 13px; }
 .tip .time { color: var(--text-2); margin-bottom: 4px; }
 .tip .row { display: flex; align-items: center; gap: 7px; }
 .tip .row i { width: 8px; height: 8px; border-radius: 50%; }
@@ -135,7 +184,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
 .edit .hint { color: var(--muted); font-size: 12px; }
 .edit .msg { flex-basis: 100%; color: var(--critical); font-size: 13px; }
 .btn { border: 0; border-radius: 999px; padding: 7px 14px; cursor: pointer; background: var(--raised); color: var(--text); font-size: 13px; }
-.btn.primary { background: var(--battery); color: #06261c; font-weight: 600; }
+.btn.primary { background: var(--battery); color: var(--on-accent); font-weight: 600; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .lock { color: var(--muted); font-size: 12px; }
 </style>
@@ -145,6 +194,11 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
   <header>
     <h1>JSD Solar J4000HC</h1>
     <span class="link" id="link"><i></i><span></span></span>
+    <div class="themes" role="group" aria-label="Тема оформлення" id="themes">
+      <button data-theme="flow" style="--sw:#35d6a5;--sw-ring:#171b20"><i></i><span>Потік</span></button>
+      <button data-theme="gauges" style="--sw:#f5b83d;--sw-ring:#0f1828"><i></i><span>Прилади</span></button>
+      <button data-theme="tiles" style="--sw:#ffffff;--sw-ring:#6d4fd8"><i></i><span>Світла</span></button>
+    </div>
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="overview">Огляд</button>
       <button role="tab" data-tab="settings">Налаштування</button>
@@ -153,7 +207,32 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
 
   <div id="tab-overview">
     <section class="hero">
-      <div class="card flow">
+      <div class="card gauges" data-info="gauges" hidden>
+        <svg viewBox="0 0 360 430" role="img" aria-label="Шкали: заряд батареї, завантаження інвертора, потужність панелей">
+          <path class="g-track" d="M60 190 A120 120 0 0 1 300 190"/>
+          <path class="g-fill" id="gBatt" d="M60 190 A120 120 0 0 1 300 190" pathLength="100" stroke-dasharray="0 100" style="stroke:var(--battery)"/>
+          <text x="180" y="160" text-anchor="middle"><tspan class="g-big" id="gSoc">—</tspan><tspan class="g-unit" dx="3">%</tspan></text>
+          <text class="g-lbl" x="180" y="186" text-anchor="middle">Батарея · <tspan id="gBattV">—</tspan></text>
+          <text class="g-end" x="60" y="212" text-anchor="middle">0</text>
+          <text class="g-end" x="300" y="212" text-anchor="middle">100</text>
+
+          <path class="g-track" d="M30 350 A64 64 0 0 1 158 350"/>
+          <path class="g-fill" id="gLoad" d="M30 350 A64 64 0 0 1 158 350" pathLength="100" stroke-dasharray="0 100" style="stroke:var(--load)"/>
+          <text class="g-val" x="94" y="340" text-anchor="middle" id="gLoadW">—</text>
+          <text class="g-lbl" x="94" y="382" text-anchor="middle">Споживання</text>
+          <text class="g-sub" x="94" y="400" text-anchor="middle" id="gLoadPct"></text>
+
+          <path class="g-track" d="M202 350 A64 64 0 0 1 330 350"/>
+          <path class="g-fill" id="gPv" d="M202 350 A64 64 0 0 1 330 350" pathLength="100" stroke-dasharray="0 100" style="stroke:var(--pv)"/>
+          <text class="g-val" x="266" y="340" text-anchor="middle" id="gPvW">—</text>
+          <text class="g-lbl" x="266" y="382" text-anchor="middle">Панелі</text>
+          <text class="g-sub" x="266" y="400" text-anchor="middle">шкала до 5000 Вт</text>
+        </svg>
+      </div>
+
+      <div class="card sparks" data-info="tiles" id="sparks" hidden></div>
+
+      <div class="card flow" data-info="flow">
         <svg viewBox="0 0 360 430" role="img" aria-label="Схема потоків енергії: панелі та мережа до батареї, батарея до дому">
           <path class="wire" d="M64 136 C64 196 70 236 94 236"/>
           <path class="pulse pv" id="flowPv" d="M64 136 C64 196 70 236 94 236"/>
@@ -262,6 +341,14 @@ const GROUPS = [
   ['Вирівнювання', ['equalization_voltage', 'equalization_time', 'equalization_timeout', 'equalization_interval']],
   ['BMS', ['soc_shutdown', 'soc_to_grid', 'soc_to_battery']],
 ];
+const SPARKS = [
+  { key: 'out_power_w', name: 'Споживання', unit: 'Вт', digits: 0, color: 'var(--load)' },
+  { key: 'pv_power_w', name: 'Панелі', unit: 'Вт', digits: 0, color: 'var(--pv)' },
+  { key: 'battery_voltage_v', name: 'Батарея', unit: 'В', digits: 1, color: 'var(--battery)' },
+  { key: 'grid_voltage_v', name: 'Мережа', unit: 'В', digits: 0, color: 'var(--grid)' },
+];
+const THEMES = ['flow', 'gauges', 'tiles'];
+const PV_MAX_W = 5000;  // maximum PV input of the J4000HC, the full scale of the panels gauge
 const STALE_AFTER = 20; // seconds without a reading before the link is shown as down
 const FLOW_MIN_W = 5;   // below this a flow line stays idle
 const RING = 2 * Math.PI * 80;
@@ -276,6 +363,8 @@ let geom = null;
 let settings = [];
 let editing = null; // key of the setting being edited; pauses re-rendering of the list
 let live = false;   // WebSocket is open
+let theme = 'flow';
+let sparkRows = [];
 
 const fmt = (v, digits = 0) => v == null ? '—' : v.toLocaleString('uk-UA', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const clock = (ts, seconds) => new Date(ts * 1000).toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit', second: seconds ? '2-digit' : undefined });
@@ -319,6 +408,56 @@ function renderFlow() {
   $('battState').textContent = d.mode === 'Від батареї' && d.out_power_w >= FLOW_MIN_W ? 'живить дім'
     : d.mode === 'Від мережі' && d.battery_current_a > 0 ? 'заряджається' : '';
   $('loadBar').style.width = Math.min(d.load_pct, 100) + '%';
+
+  const arc = pct => `${Math.max(0, Math.min(pct, 100)).toFixed(1)} 100`;
+  $('gSoc').textContent = fmt(d.battery_soc_pct);
+  $('gBatt').setAttribute('stroke-dasharray', arc(d.battery_soc_pct));
+  $('gBattV').textContent = fmt(d.battery_voltage_v, 1) + ' В';
+  $('gLoadW').textContent = fmt(d.out_power_w) + ' Вт';
+  $('gLoad').setAttribute('stroke-dasharray', arc(d.load_pct));
+  $('gLoadPct').textContent = fmt(d.load_pct) + ' % інвертора';
+  $('gPvW').textContent = fmt(d.pv_power_w) + ' Вт';
+  $('gPv').setAttribute('stroke-dasharray', arc(d.pv_power_w / PV_MAX_W * 100));
+  renderSparks();
+}
+
+// Tiles of the light theme: current value over its trend for the last 15 minutes.
+function renderSparks() {
+  if (theme !== 'tiles') return;
+  $('sparks').innerHTML = SPARKS.map(s => {
+    const pts = sparkRows.filter(r => r[s.key] != null);
+    const vals = pts.map(r => r[s.key]);
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const t0 = pts.length ? pts[0].ts : 0, tSpan = pts.length > 1 ? pts[pts.length - 1].ts - t0 : 1;
+    // an unchanged value draws as a line through the middle, not along the bottom edge
+    const yOf = v => hi === lo ? 16 : 29 - (v - lo) / (hi - lo) * 26;
+    const line = pts.map(r => `${((r.ts - t0) / tSpan * 100).toFixed(1)},${yOf(r[s.key]).toFixed(1)}`).join(' ');
+    return `<div class="spark">
+      <div class="k"><i style="background:${s.color}"></i>${s.name}</div>
+      <div class="v">${fmt(latest[s.key], s.digits)} <small>${s.unit}</small></div>
+      <svg viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label="${s.name} за 15 хвилин">${pts.length > 1 ? `<polyline points="${line}" style="stroke:${s.color}"/>` : ''}</svg>
+      <div class="range">${pts.length > 1 ? `<span>мін ${fmt(lo, s.digits)}</span><span>15 хв</span><span>макс ${fmt(hi, s.digits)}</span>` : '<span>тренд з\'явиться за хвилину</span>'}</div>
+    </div>`;
+  }).join('');
+}
+
+async function refreshSparks() {
+  if (theme !== 'tiles') return;
+  try {
+    sparkRows = await getJson('/api/history?minutes=15');
+  } catch (e) { return; }
+  renderSparks();
+}
+
+function setTheme(name) {
+  theme = name;
+  store.set('theme', name);
+  document.documentElement.dataset.theme = name;
+  document.querySelectorAll('#themes button').forEach(b => b.setAttribute('aria-pressed', b.dataset.theme === name));
+  document.querySelectorAll('[data-info]').forEach(el => { el.hidden = el.dataset.info !== name; });
+  renderSparks();
+  refreshSparks();
+  renderChart();
 }
 
 function applyReading(data) {
@@ -513,6 +652,7 @@ function setTab(name) {
 }
 
 document.querySelector('.tabs').addEventListener('click', ev => { if (ev.target.dataset.tab) setTab(ev.target.dataset.tab); });
+$('themes').addEventListener('click', ev => { const b = ev.target.closest('button'); if (b) setTheme(b.dataset.theme); });
 $('groups').addEventListener('click', ev => {
   const t = ev.target;
   if (t.dataset.edit) { editing = t.dataset.edit; renderSettings(); }
@@ -532,6 +672,9 @@ svg.addEventListener('pointerleave', clearHover);
 window.addEventListener('resize', renderChart);
 
 $('legend').innerHTML = SERIES.map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join('');
+// ?theme=gauges in the address picks a theme for this device, e.g. a wall-mounted tablet
+const wanted = new URLSearchParams(location.search).get('theme') || store.get('theme');
+setTheme(THEMES.includes(wanted) ? wanted : 'flow');
 setTab(store.get('tab') === 'settings' ? 'settings' : 'overview');
 setRange(minutes);
 refreshLatest();
@@ -539,6 +682,7 @@ refreshSettings();
 connectLive();
 setInterval(() => live ? renderLink() : refreshLatest(), 2000);
 setInterval(refreshHistory, 15000);
+setInterval(refreshSparks, 15000);
 setInterval(() => { if (!live) refreshSettings(); }, 15000);
 </script>
 </body>
