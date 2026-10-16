@@ -253,6 +253,8 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
 .btn.primary { background: var(--battery); color: var(--on-accent); font-weight: 600; }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .lock { color: var(--muted); font-size: 12px; }
+.row .name small { display: block; color: var(--muted); font-size: 11px; font-family: ui-monospace, Consolas, monospace; }
+.row .cur.none { color: var(--muted); font-weight: 400; }
 </style>
 </head>
 <body>
@@ -268,6 +270,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
     </div>
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="overview">Огляд</button>
+      <button role="tab" data-tab="params">Параметри</button>
       <button role="tab" data-tab="settings">Налаштування</button>
     </div>
   </header>
@@ -462,6 +465,11 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
     </div>
   </div>
 
+  <div id="tab-params" hidden>
+    <p class="warn">Усе, що логер читає з інвертора. Додаткові команди опитуються по одній за цикл, тож оновлюються приблизно раз на хвилину. Розміщення полів узято з ha-eybond-local; крім температур і вентиляторів, на цьому інверторі їх не звірено. Коди показано так, як їх надсилає інвертор.</p>
+    <div class="groups" id="paramGroups"></div>
+  </div>
+
   <div id="tab-settings" hidden>
     <p class="warn"><span id="settingsNote"></span> <span id="settingsAge"></span></p>
     <div class="groups" id="groups"></div>
@@ -488,6 +496,69 @@ const TEMPS = [
   { key: 'temp_mppt1_c', name: 'MPPT 1', optional: true },  // 0 on units without these sensors
   { key: 'temp_mppt2_c', name: 'MPPT 2', optional: true },
 ];
+// every field the logger stores: [key, title, unit, digits]
+const PARAMS = [
+  ['Стан', [
+    ['mode', 'Режим роботи'], ['fault_code', 'Код аварії'], ['warning_code_1', 'Код попереджень 1'],
+    ['warning_code_2', 'Код попереджень 2'], ['pv_warning_code', 'Попередження (GPV)'],
+    ['comm_status_code', 'Стан зв\'язку (GPDAT0)'], ['internal_code', 'Внутрішній код (GPDAT0)'],
+  ]],
+  ['Вихід', [
+    ['out_voltage_v', 'Напруга', 'В', 1], ['out_frequency_hz', 'Частота', 'Гц', 1], ['out_current_a', 'Струм', 'А', 2],
+    ['out_low_current_a', 'Струм (малий діапазон)', 'А', 2], ['out_power_w', 'Активна потужність', 'Вт', 0],
+    ['out_apparent_va', 'Повна потужність', 'ВА', 0], ['out_low_current_power_w', 'Потужність (малий діапазон)', 'Вт', 0],
+    ['out_half_wave_va', 'Повна потужність півхвилі', 'ВА', 0], ['load_pct', 'Завантаження', '%', 0],
+  ]],
+  ['Інвертор', [
+    ['inverter_voltage_v', 'Напруга інвертора', 'В', 1], ['inverter_frequency_hz', 'Частота інвертора', 'Гц', 1],
+    ['inverter_current_a', 'Струм інвертора', 'А', 2], ['bus_voltage_v', 'Напруга шини DC', 'В', 1],
+    ['bus_ref_start_v', 'Опорна напруга шини при старті', 'В', 1], ['bus_ref_v', 'Опорна напруга шини', 'В', 1],
+    ['temperature_c', 'Температура плати', '°C', 0],
+  ]],
+  ['Мережа', [
+    ['grid_voltage_v', 'Напруга', 'В', 1], ['grid_frequency_hz', 'Частота', 'Гц', 1],
+    ['grid_loss_high_v', 'Відключення: верхня напруга', 'В', 1], ['grid_loss_low_v', 'Відключення: нижня напруга', 'В', 1],
+    ['grid_restore_high_v', 'Повернення: верхня напруга', 'В', 1], ['grid_restore_low_v', 'Повернення: нижня напруга', 'В', 1],
+    ['grid_loss_high_hz', 'Відключення: верхня частота', 'Гц', 1], ['grid_loss_low_hz', 'Відключення: нижня частота', 'Гц', 1],
+  ]],
+  ['Панелі', [
+    ['pv_voltage_v', 'Напруга', 'В', 1], ['pv_current_a', 'Струм заряду', 'А', 2], ['pv_input_current_a', 'Вхідний струм', 'А', 2],
+    ['pv_power_w', 'Потужність', 'Вт', 0], ['pv_tracking_code', 'Стан MPPT'], ['pv_chargeable_code', 'Можливість заряду'],
+  ]],
+  ['Батарея і заряд', [
+    ['battery_voltage_v', 'Напруга', 'В', 2], ['battery_current_a', 'Струм', 'А', 1], ['battery_power_w', 'Потужність', 'Вт', 0],
+    ['battery_soc_pct', 'Заряд', '%', 0], ['battery_cells', 'Кількість елементів', '', 0],
+    ['charging_voltage_v', 'Напруга заряду', 'В', 2], ['charging_current_a', 'Струм заряду', 'А', 1],
+    ['battery_type_code', 'Код типу батареї'], ['charging_mode_code', 'Код режиму заряду'],
+    ['equalization_enabled', 'Вирівнювання ввімкнено'], ['equalization_elapsed_h', 'Від останнього вирівнювання', 'год', 0],
+    ['low_power_discharge_h', 'Час розряду малою потужністю', 'год', 0],
+  ]],
+  ['Енергія', [
+    ['pv_energy_today_kwh', 'Панелі сьогодні', 'кВт·год', 2], ['pv_energy_total_kwh', 'Панелі всього', 'кВт·год', 1],
+    ['grid_energy_today_kwh', 'Мережа сьогодні', 'кВт·год', 2], ['grid_energy_total_kwh', 'Мережа всього', 'кВт·год', 1],
+    ['out_energy_today_kwh', 'Вихід сьогодні', 'кВт·год', 2], ['out_energy_total_kwh', 'Вихід всього', 'кВт·год', 1],
+  ]],
+  ['Охолодження', [
+    ['fan_pct', 'Оберти вентиляторів', '%', 0], ['fan1_speed', 'Вентилятор 1, датчик', '', 0],
+    ['fan2_speed', 'Вентилятор 2, датчик', '', 0], ['fan1_stopped', 'Вентилятор 1 зупинений'], ['fan2_stopped', 'Вентилятор 2 зупинений'],
+    ['temp_charger_c', 'Зарядний пристрій', '°C', 0], ['temp_pv_c', 'Сторона панелей', '°C', 0],
+    ['temp_ambient_c', 'Навколишня', '°C', 0], ['temp_mppt1_c', 'MPPT 1', '°C', 0], ['temp_mppt2_c', 'MPPT 2', '°C', 0],
+  ]],
+  ['BMS', [
+    ['bms_voltage_v', 'Напруга', 'В', 1], ['bms_current_a', 'Струм', 'А', 2], ['bms_soc_pct', 'Заряд', '%', 0],
+    ['bms_temp_c', 'Температура', '°C', 1], ['bms_remaining_ah', 'Залишок ємності', 'А·год', 1],
+    ['bms_rated_ah', 'Номінальна ємність', 'А·год', 1], ['bms_max_charging_current_a', 'Макс. струм заряду', 'А', 1],
+    ['bms_cv_point_v', 'Напруга CV', 'В', 1], ['bms_comm_code', 'Код зв\'язку'], ['bms_status_code', 'Код стану'],
+    ['bms_fault_code', 'Код аварії'], ['bms_warning_code', 'Код попередження'],
+  ]],
+  ['Пристрій', [
+    ['rated_out_voltage_v', 'Номінальна вихідна напруга', 'В', 0], ['rated_out_current_a', 'Номінальний вихідний струм', 'А', 1],
+    ['rated_battery_voltage_v', 'Номінальна напруга батареї', 'В', 0], ['rated_frequency_hz', 'Номінальна частота', 'Гц', 0],
+    ['firmware_version', 'Версія прошивки'], ['firmware_date', 'Дата прошивки'],
+    ['inverter_date', 'Дата в інверторі'], ['clock_offset_s', 'Годинник інвертора відносно сервера', 'с', 0],
+  ]],
+];
+const FLAGS = new Set(['fan1_stopped', 'fan2_stopped', 'equalization_enabled']);
 const GROUPS = [
   ['Режими', ['output_priority', 'output_mode', 'charging_priority', 'battery_type', 'charging_method']],
   ['Заряд', ['max_charging_current', 'utility_charging_current', 'cv_voltage', 'float_voltage', 'cv_time', 'cc_max_time']],
@@ -503,6 +574,7 @@ const SPARKS = [
   { key: 'grid_voltage_v', name: 'Мережа', unit: 'В', digits: 0, color: 'var(--grid)' },
 ];
 const THEMES = ['flow', 'gauges', 'tiles', 'panel'];
+const TABS = ['overview', 'params', 'settings'];
 const PV_MAX_W = 5000;  // maximum PV input of the J4000HC, the full scale of the panels gauge
 const STALE_AFTER = 20; // seconds without a reading before the link is shown as down
 const FLOW_MIN_W = 5;   // below this a flow line stays idle
@@ -617,7 +689,7 @@ function renderSparks() {
 async function refreshSparks() {
   if (theme !== 'tiles') return;
   try {
-    sparkRows = await getJson('/api/history?minutes=15');
+    sparkRows = await getJson('/api/history?minutes=15&fields=' + SPARKS.map(s => s.key).join(','));
   } catch (e) { return; }
   renderSparks();
 }
@@ -642,6 +714,7 @@ function applyReading(data) {
   });
   renderFlow();
   renderCooling();
+  renderParams();
   renderLink();
 }
 
@@ -667,7 +740,7 @@ function connectLive() {
 
 async function refreshHistory() {
   try {
-    rows = await getJson('/api/history?minutes=' + minutes);
+    rows = await getJson(`/api/history?minutes=${minutes}&fields=${CHARTS.flatMap(c => c.series.map(s => s.key)).join(',')}`);
   } catch (e) { return; }
   renderChart();
   renderTable();
@@ -764,7 +837,7 @@ function fanState(stopped, pct) {
 function renderCooling() {
   const d = latest;
   const has = d.fan_pct != null || d.temp_charger_c != null;
-  $('coolAge').textContent = has ? 'Оновлюється приблизно раз на пів хвилини' : 'Чекаю на дані від інвертора';
+  $('coolAge').textContent = has ? 'Оновлюється приблизно раз на хвилину' : 'Чекаю на дані від інвертора';
   $('fanPct').textContent = fmt(d.fan_pct);
   $('fanBar').style.width = Math.min(d.fan_pct || 0, 100) + '%';
   $('fan1Speed').textContent = fmt(d.fan1_speed);
@@ -776,6 +849,24 @@ function renderCooling() {
   }
   $('temps').innerHTML = TEMPS.filter(t => !(t.optional && !d[t.key]))
     .map(t => `<div><dt>${t.name}</dt><dd>${fmt(d[t.key])} °C</dd></div>`).join('');
+}
+
+function paramText(key, unit, digits) {
+  const v = latest[key];
+  if (v == null) return '<span class="cur none">немає даних</span>';
+  const text = typeof v === 'string' ? v : FLAGS.has(key) ? (v ? 'так' : 'ні') : fmt(v, digits) + (unit ? ' ' + unit : '');
+  return `<span class="cur">${text}</span>`;
+}
+
+function renderParams() {
+  if ($('tab-params').hidden) return;
+  const known = new Set(PARAMS.flatMap(([, list]) => list.map(p => p[0])).concat('ts'));
+  // fields a newer logger stores that this page does not know yet
+  const other = Object.keys(latest).filter(k => !known.has(k)).map(k => [k, k]);
+  const groups = other.length ? [...PARAMS, ['Інше', other]] : PARAMS;
+  $('paramGroups').innerHTML = groups.map(([title, list]) =>
+    `<section class="card group"><h2>${title}</h2>${list.map(([key, name, unit, digits]) =>
+      `<div class="row"><span class="name">${name}<small>${key}</small></span>${paramText(key, unit, digits || 0)}</div>`).join('')}</section>`).join('');
 }
 
 async function refreshSettings() {
@@ -850,9 +941,9 @@ function setRange(value) {
 function setTab(name) {
   store.set('tab', name);
   document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === name));
-  $('tab-overview').hidden = name !== 'overview';
-  $('tab-settings').hidden = name !== 'settings';
+  for (const t of TABS) $('tab-' + t).hidden = t !== name;
   if (name === 'overview') renderChart();
+  renderParams();
 }
 
 document.querySelector('.tabs').addEventListener('click', ev => { if (ev.target.dataset.tab) setTab(ev.target.dataset.tab); });
@@ -883,7 +974,7 @@ renderCooling();
 // ?theme=gauges in the address picks a theme for this device, e.g. a wall-mounted tablet
 const wanted = new URLSearchParams(location.search).get('theme') || store.get('theme');
 setTheme(THEMES.includes(wanted) ? wanted : 'flow');
-setTab(store.get('tab') === 'settings' ? 'settings' : 'overview');
+setTab(TABS.includes(store.get('tab')) ? store.get('tab') : 'overview');
 setRange(minutes);
 refreshLatest();
 refreshSettings();

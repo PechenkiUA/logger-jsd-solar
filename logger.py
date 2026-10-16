@@ -113,16 +113,49 @@ SETTINGS = [
 SETTINGS_BY_KEY = {s['key']: s for s in SETTINGS}
 SETTINGS_EVERY = 3  # poll cycles between two setting reads; one full pass takes a few minutes
 
-# Fans and temperatures change slowly, so they are read every few cycles and attached to every
-# reading in between. Field positions are from ha-eybond-local; the meaning of the fan speed
-# numbers is not documented, they are stored as the inverter reports them.
-THERMAL_COMMANDS = {
+
+def clock_offset(parts: list[str]) -> dict:
+    """Seconds the inverter clock runs ahead of ours, from a TIME?????? reply (hour minute second)."""
+    h, m, s = (int(p) for p in parts[:3])
+    now = time.localtime()
+    diff = (h * 3600 + m * 60 + s) - (now.tm_hour * 3600 + now.tm_min * 60 + now.tm_sec)
+    return {'clock_offset_s': (diff + 43200) % 86400 - 43200}  # nearest way round midnight
+
+
+# Everything GPDAT0 does not carry. One of these commands is asked per poll cycle in turn and its
+# values are attached to every reading until the next answer. Field positions and scaling are from
+# ha-eybond-local; apart from the fans and temperatures none of it is checked on this inverter.
+# index -> name, (name, divisor) or (name, str) for codes kept as text; an (high, low) index pair
+# is a 32-bit counter. A function instead of a map decodes the whole reply itself.
+EXTRA_COMMANDS = {
     'FAN???': {0: 'fan_pct', 1: 'fan1_speed', 2: 'fan2_speed', 3: 'fan1_stopped', 4: 'fan2_stopped'},
     'GTMP': {0: 'temp_pv_c', 1: 'temp_charger_c', 2: 'temp_ambient_c', 3: 'temp_mppt1_c', 4: 'temp_mppt2_c'},
+    'GPV': {3: 'pv_input_current_a', 5: ('pv_tracking_code', str), 6: ('pv_chargeable_code', str),
+            20: ('pv_energy_today_kwh', 100), (21, 22): ('pv_energy_total_kwh', 100), 23: ('pv_warning_code', str)},
+    'GOP': {3: 'out_low_current_a', 7: 'out_low_current_power_w', 8: 'out_half_wave_va',
+            12: ('out_energy_today_kwh', 100), (13, 14): ('out_energy_total_kwh', 100)},
+    'GLINE': {2: 'grid_loss_high_v', 3: 'grid_loss_low_v', 4: 'grid_restore_high_v', 5: 'grid_restore_low_v',
+              6: 'grid_loss_high_hz', 7: 'grid_loss_low_hz',
+              10: ('grid_energy_today_kwh', 100), (11, 12): ('grid_energy_total_kwh', 100)},
+    'GWS': {0: ('fault_code', str), 1: ('warning_code_1', str), 2: ('warning_code_2', str)},
+    'GCHG': {1: 'charging_voltage_v', 3: 'charging_current_a', 14: 'equalization_enabled',
+             15: ('battery_type_code', str), 16: 'low_power_discharge_h', 17: ('charging_mode_code', str)},
+    'GBUS': {0: 'bus_voltage_v', 1: 'bus_ref_start_v', 2: 'bus_ref_v'},
+    'GINV': {2: 'inverter_current_a'},
+    'GBAT': {2: 'battery_cells'},
+    'TCQN????': {0: 'equalization_elapsed_h'},
+    'GBMS': {0: ('bms_comm_code', str), 1: ('bms_status_code', str), 2: ('bms_voltage_v', 10),
+             3: ('bms_current_a', 100), 4: ('bms_temp_c', 10), 5: 'bms_soc_pct', 6: ('bms_remaining_ah', 10),
+             7: ('bms_rated_ah', 10), 8: ('bms_fault_code', str), 9: ('bms_warning_code', str),
+             10: ('bms_max_charging_current_a', 100), 11: ('bms_cv_point_v', 10)},
+    'DATE??????': lambda p: {'inverter_date': f'{2000 + int(p[0]):04d}-{int(p[1]):02d}-{int(p[2]):02d}'},
+    'TIME??????': clock_offset,
+    'F': {0: 'rated_out_voltage_v', 1: 'rated_out_current_a', 2: 'rated_battery_voltage_v', 3: 'rated_frequency_hz'},
+    'SVFW': {0: ('firmware_version', str), 1: ('firmware_date', str)},
 }
-THERMAL_EVERY = 6      # poll cycles between two reads
-THERMAL_MAX_AGE = 300  # seconds a read stays attached to readings; older values are dropped
-THERMAL_BACKOFF = 600  # seconds before asking again a command the inverter did not answer
+STATIC_COMMANDS = {'F', 'SVFW'}  # ratings and firmware: asked until the first answer, kept forever
+EXTRA_MAX_AGE = 300  # seconds a read stays attached to readings; older values are dropped
+EXTRA_BACKOFF = 600  # seconds before asking again a command the inverter did not answer
 
 WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 WS_TIMEOUT = 5.0  # a browser that stops reading must not stall the polling loop for longer
@@ -130,9 +163,9 @@ ws_clients = {}  # socket -> send lock, for every open dashboard WebSocket
 ws_clients_lock = threading.Lock()
 last_reading = None  # newest stored reading, sent to a dashboard as soon as it connects
 
-thermal = {}         # command -> {'values': {...}, 'ts': time.time() of the reply}
-thermal_skip = {}    # command -> monotonic time until which it is not asked
-thermal_logged = set()  # commands whose raw reply was already logged once since start
+extra = {}           # command -> {'values': {...}, 'ts': time.time() of the reply}
+extra_skip = {}      # command -> monotonic time until which it is not asked
+extra_logged = set()  # commands whose raw reply was already logged once since start
 
 last_odd_reply = float('-inf')  # monotonic time of the last logged unparseable GPDAT0 reply
 setting_values = {}  # key -> {'raw': str, 'ts': int}; shared with the dashboard thread
@@ -274,37 +307,64 @@ def read_live(dongle: Dongle) -> dict | None:
         values['battery_power_w'] = round(values['battery_voltage_v'] * values['battery_current_a'])
     if len(fields) > 1:
         values['mode'] = MODES.get(fields[1], fields[1])
+    if len(fields) > 2:  # undocumented status codes, kept as text
+        values['comm_status_code'], values['internal_code'] = fields[0], fields[2]
     return values
 
 
-def read_thermal(dongle: Dongle) -> None:
-    """Read fan state and temperatures; a command that gets no usable reply is paused for a while."""
-    for command, fields in THERMAL_COMMANDS.items():
-        if time.monotonic() < thermal_skip.get(command, 0):
+def decode_fields(parts: list[str], fields: dict) -> dict:
+    values = {}
+    for index, spec in fields.items():
+        name, kind = spec if isinstance(spec, tuple) else (spec, 1)
+        try:
+            if kind is str:
+                values[name] = parts[index]
+                continue
+            if isinstance(index, tuple):
+                raw = (int(parts[index[0]]) << 16) + int(parts[index[1]])
+            else:
+                raw = float(parts[index])
+        except (IndexError, ValueError):
             continue
-        reply = dongle.command(command)
-        parts = (reply or '').split()
+        if raw in (0xFFFF, 0xFFFFFFFF):  # the inverter's "not available"
+            continue
+        values[name] = round(raw / kind, 3)
+    return values
+
+
+def read_extra(dongle: Dongle, cycle: int) -> None:
+    """Ask the next due command of EXTRA_COMMANDS; one that gets no usable reply is paused for a while."""
+    now = time.monotonic()
+    due = [c for c in EXTRA_COMMANDS
+           if now >= extra_skip.get(c, 0) and not (c in STATIC_COMMANDS and c in extra)]
+    if not due:
+        return
+    command = due[cycle % len(due)]
+    reply = dongle.command(command)
+    parts = [] if reply in (None, 'NAK', 'NOA', 'ERCRC') else reply.split()
+    fields = EXTRA_COMMANDS[command]
+    try:
+        values = fields(parts) if callable(fields) else decode_fields(parts, fields)
+    except (IndexError, ValueError):
         values = {}
-        for i, name in fields.items():
-            try:
-                values[name] = float(parts[i])
-            except (IndexError, ValueError):
-                pass
-        if not values:
-            thermal_skip[command] = time.monotonic() + THERMAL_BACKOFF
-            log(f'{command}: no usable reply {reply!r}, next try in {THERMAL_BACKOFF // 60} min')
-            continue
-        if command not in thermal_logged:  # the raw reply helps to check what the fields mean
-            thermal_logged.add(command)
-            log(f'{command} reply: {reply!r}')
-        thermal[command] = {'values': values, 'ts': time.time()}
+    # without a BMS the inverter answers GBMS with zeros
+    if command == 'GBMS' and not any(v for v in values.values() if isinstance(v, float)):
+        values = {}
+    if not values:
+        extra_skip[command] = time.monotonic() + EXTRA_BACKOFF
+        log(f'{command}: no usable reply {reply!r}, next try in {EXTRA_BACKOFF // 60} min')
+        return
+    if command not in extra_logged:  # the raw reply helps to check what the fields mean
+        extra_logged.add(command)
+        log(f'{command} reply: {reply!r}')
+    extra[command] = {'values': values, 'ts': time.time()}
 
 
-def thermal_values() -> dict:
+def extra_values() -> dict:
     now = time.time()
     values = {}
-    for state in thermal.values():
-        if now - state['ts'] <= THERMAL_MAX_AGE:
+    for command, state in extra.items():
+        if command in STATIC_COMMANDS or now - state['ts'] <= EXTRA_MAX_AGE:
             values.update(state['values'])
     return values
 
@@ -367,15 +427,15 @@ def settings_view() -> list[dict]:
     return items
 
 
-def history(db: sqlite3.Connection, minutes: int) -> list[dict]:
-    """Readings of the last `minutes`, averaged into at most HISTORY_POINTS buckets."""
+def history(db: sqlite3.Connection, minutes: int, names: set[str] | None = None) -> list[dict]:
+    """Readings of the last `minutes`, averaged into at most HISTORY_POINTS buckets; only `names` if given."""
     since = int(time.time()) - minutes * 60
     bucket = max(1, minutes * 60 // HISTORY_POINTS)
     sums: dict[int, dict[str, list[float]]] = {}
     for ts, data in db.execute('SELECT ts, data FROM readings WHERE ts >= ? ORDER BY ts', (since,)):
         slot = sums.setdefault(ts // bucket * bucket, {})
         for name, value in json.loads(data).items():
-            if isinstance(value, (int, float)):
+            if isinstance(value, (int, float)) and (names is None or name in names):
                 slot.setdefault(name, []).append(value)
     return [{'ts': ts, **{name: round(sum(v) / len(v), 2) for name, v in slot.items()}}
             for ts, slot in sums.items()]
@@ -420,8 +480,10 @@ class Dashboard(BaseHTTPRequestHandler):
                 row = db.execute('SELECT ts, data FROM readings ORDER BY ts DESC LIMIT 1').fetchone()
                 body = {'ts': row[0], **json.loads(row[1])} if row else None
             else:
-                minutes = int(parse_qs(url.query).get('minutes', ['60'])[0])
-                body = history(db, min(max(minutes, 1), 7 * 24 * 60))
+                query = parse_qs(url.query)
+                minutes = int(query.get('minutes', ['60'])[0])
+                names = set(query['fields'][0].split(',')) if 'fields' in query else None
+                body = history(db, min(max(minutes, 1), 7 * 24 * 60), names)
         finally:
             db.close()
         self.reply_json(body)
@@ -567,11 +629,10 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
                             apply_write(dongle, setting, raw, result)
                     finally:
                         done.set()
-                if cycle % THERMAL_EVERY == 1:
-                    read_thermal(dongle)
+                read_extra(dongle, cycle)
                 values = read_live(dongle)
                 if values:
-                    values.update(thermal_values())
+                    values.update(extra_values())
                     now = int(time.time())
                     db.execute('INSERT INTO readings (ts, data) VALUES (?, ?)', (now, json.dumps(values)))
                     db.commit()
