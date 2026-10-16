@@ -44,6 +44,15 @@
   --grid: #2a78d6; --heat: #d9572a; --heat-line: #d9572a; --critical: #d03b3b; --on-accent: #ffffff;
   --shadow: 0 8px 24px rgba(16, 22, 29, 0.14);
 }
+/* "Панель": night-blue control panel with a glowing inverter diagram */
+:root[data-theme="panel"] {
+  --page: #08101d; --surface: #0f1b2d; --raised: #15233a; --line: #1f3150; --axis: #2c4263;
+  --text: #e8eef8; --text-2: #a8b7cc; --muted: #7b8ca6;
+  --pv: #4f9dff; --pv-line: #3b82f6; --battery: #34d399; --battery-line: #10b981;
+  --load: #f5a524; --load-line: #e08e0b; --grid: #a78bfa;
+  --heat: #ff7a59; --heat-line: #f0603c; --on-accent: #052417;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.45 var(--body); }
 main { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
@@ -119,6 +128,50 @@ h2 { margin: 0; font: 500 13px var(--display); letter-spacing: 0.02em; }
 .spark svg { display: block; width: 100%; height: 44px; }
 .spark polyline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .spark .range { display: flex; justify-content: space-between; margin-top: 6px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+/* panel infographic: inverter in the middle, sources and consumers around it */
+.pflow { padding: 12px; display: flex; justify-content: center; align-items: center; }
+.pflow svg { display: block; width: 100%; max-width: 460px; height: auto; }
+.pflow text { font-family: var(--body); fill: var(--text); }
+.pflow .lbl { fill: var(--text-2); font-size: 13px; }
+.pflow .val { font: 500 15px var(--display); }
+.pflow .sub { fill: var(--muted); font-size: 12px; }
+.pnode circle { fill: var(--raised); stroke: currentColor; stroke-width: 1.5; stroke-opacity: 0.35; }
+.pnode path { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pnode { color: var(--muted); transition: color 0.4s, filter 0.4s; }
+.pnode.on { filter: drop-shadow(0 0 10px currentColor); }
+.pnode.on circle { stroke-opacity: 0.9; }
+.pnode.on.pv { color: var(--pv); } .pnode.on.grid { color: var(--grid); }
+.pnode.on.batt { color: var(--battery); } .pnode.on.load { color: var(--load); }
+.pcore { color: var(--pv); filter: drop-shadow(0 0 16px rgba(79, 157, 255, 0.45)); }
+.pcore circle { fill: var(--raised); stroke: currentColor; stroke-width: 2; }
+.pcore path { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pulse.batt { stroke: var(--battery); }
+.pulse.rev { animation-direction: reverse; }
+.figure.extra { display: none; }
+.lower { margin: 0; }
+
+/* panel theme layout */
+:root[data-theme="panel"] body { background: radial-gradient(1100px 520px at 75% -8%, #142a4d 0%, transparent 65%) no-repeat, var(--page); }
+:root[data-theme="panel"] main { max-width: 1400px; }
+:root[data-theme="panel"] h1 { font-size: 19px; }
+:root[data-theme="panel"] h2 { font-size: 15px; }
+:root[data-theme="panel"] .card { background: linear-gradient(160deg, #12223b 0%, #0d1828 100%); border: 1px solid var(--line); box-shadow: var(--shadow); }
+:root[data-theme="panel"] .tabs { border: 1px solid var(--line); }
+:root[data-theme="panel"] .tabs button[aria-selected="true"] { background: var(--battery-line); color: #ffffff; }
+:root[data-theme="panel"] .figures { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+:root[data-theme="panel"] .figure.extra { display: block; }
+:root[data-theme="panel"] .figure, :root[data-theme="panel"] .readings > div { border: 1px solid var(--line); }
+:root[data-theme="panel"] .figure .k i { width: 10px; height: 10px; }
+:root[data-theme="panel"] .readings > div { background: var(--raised); border-radius: 12px; padding: 10px 14px; }
+:root[data-theme="panel"] .readings { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 10px; }
+:root[data-theme="panel"] .readings dd { font: 500 16px var(--body); }
+:root[data-theme="panel"] .bar i { background: linear-gradient(90deg, var(--pv-line), var(--grid)); }
+@media (min-width: 761px) { :root[data-theme="panel"] .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); } }
+@media (min-width: 1100px) {
+  :root[data-theme="panel"] .lower { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  :root[data-theme="panel"] .lower .cooling { margin-bottom: 0; }
+}
 
 /* now panel */
 .now { display: flex; flex-direction: column; gap: 18px; }
@@ -211,6 +264,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
       <button data-theme="flow" style="--sw:#35d6a5;--sw-ring:#171b20"><i></i><span>Потік</span></button>
       <button data-theme="gauges" style="--sw:#f5b83d;--sw-ring:#0f1828"><i></i><span>Прилади</span></button>
       <button data-theme="tiles" style="--sw:#ffffff;--sw-ring:#6d4fd8"><i></i><span>Світла</span></button>
+      <button data-theme="panel" style="--sw:#4f9dff;--sw-ring:#0f1b2d"><i></i><span>Панель</span></button>
     </div>
     <div class="tabs" role="tablist">
       <button role="tab" data-tab="overview">Огляд</button>
@@ -244,6 +298,55 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
       </div>
 
       <div class="card sparks" data-info="tiles" id="sparks" hidden></div>
+
+      <div class="card pflow" data-info="panel" hidden>
+        <svg viewBox="0 0 440 396" role="img" aria-label="Схема роботи: панелі та мережа до інвертора, інвертор до батареї та дому">
+          <path class="wire" d="M100 84 L166 137"/>
+          <path class="pulse pv" id="pFlowPv" d="M100 84 L166 137"/>
+          <path class="wire" d="M340 84 L274 137"/>
+          <path class="pulse grid" id="pFlowGrid" d="M340 84 L274 137"/>
+          <path class="wire" d="M166 225 L100 278"/>
+          <path class="pulse batt" id="pFlowBatt" d="M166 225 L100 278"/>
+          <path class="wire" d="M274 225 L340 278"/>
+          <path class="pulse load" id="pFlowLoad" d="M274 225 L340 278"/>
+
+          <g class="pcore">
+            <circle cx="220" cy="181" r="62"/>
+            <path transform="translate(203 136) scale(1.4)" d="M6 3h12v18H6z M13 7l-3 5h4l-3 5"/>
+          </g>
+          <text class="val" x="220" y="198" text-anchor="middle">Інвертор</text>
+          <text class="sub" x="220" y="216" text-anchor="middle" id="pMode"></text>
+
+          <g class="pnode pv" id="pNodePv">
+            <circle cx="72" cy="62" r="30"/>
+            <path transform="translate(60 50)" d="M3 6h18l-2 11H5z M3.5 11.5h17 M9 6l-1 11 M15 6l1 11 M12 17v3 M8 20h8"/>
+          </g>
+          <text class="lbl" x="72" y="114" text-anchor="middle">Сонячні панелі</text>
+          <text class="val" x="72" y="134" text-anchor="middle" id="pPvW">—</text>
+
+          <g class="pnode grid" id="pNodeGrid">
+            <circle cx="368" cy="62" r="30"/>
+            <path transform="translate(356 50)" d="M13 2L5 13h6l-1 9 8-12h-6z"/>
+          </g>
+          <text class="lbl" x="368" y="114" text-anchor="middle">Мережа</text>
+          <text class="val" x="368" y="134" text-anchor="middle" id="pGridV">—</text>
+
+          <g class="pnode batt on" id="pNodeBatt">
+            <circle cx="72" cy="300" r="30"/>
+            <path transform="translate(60 288)" d="M7 5h10v16H7z M10 3h4 M12 9.5v6 M9 12.5h6"/>
+          </g>
+          <text class="lbl" x="72" y="350" text-anchor="middle">Акумулятор</text>
+          <text class="val" x="72" y="370" text-anchor="middle" id="pBattW">—</text>
+          <text class="sub" x="72" y="388" text-anchor="middle" id="pSoc"></text>
+
+          <g class="pnode load" id="pNodeLoad">
+            <circle cx="368" cy="300" r="30"/>
+            <path transform="translate(356 288)" d="M3 11l9-8 9 8 M5 9.5V21h14V9.5 M10 21v-6h4v6"/>
+          </g>
+          <text class="lbl" x="368" y="350" text-anchor="middle">Дім</text>
+          <text class="val" x="368" y="370" text-anchor="middle" id="pLoadW">—</text>
+        </svg>
+      </div>
 
       <div class="card flow" data-info="flow">
         <svg viewBox="0 0 360 430" role="img" aria-label="Схема потоків енергії: панелі та мережа до батареї, батарея до дому">
@@ -293,6 +396,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
           <div class="figure"><div class="k"><i style="background:var(--load)"></i>Споживання</div><div class="v"><span data-f="out_power_w" data-d="0">—</span> <small>Вт</small></div></div>
           <div class="figure"><div class="k"><i style="background:var(--pv)"></i>Панелі</div><div class="v"><span data-f="pv_power_w" data-d="0">—</span> <small>Вт</small></div></div>
           <div class="figure"><div class="k"><i style="background:var(--battery)"></i>Батарея</div><div class="v"><span data-f="battery_power_w" data-d="0">—</span> <small>Вт</small></div></div>
+          <div class="figure extra"><div class="k"><i style="background:var(--grid)"></i>Мережа</div><div class="v"><span data-f="grid_voltage_v" data-d="0">—</span> <small>В</small></div></div>
         </div>
         <div>
           <div class="bar-head"><span>Завантаження інвертора</span><b><span data-f="load_pct" data-d="0">—</span> %</b></div>
@@ -309,6 +413,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
       </div>
     </section>
 
+    <div class="lower">
     <section class="card cooling">
       <div class="chart-head">
         <h2>Охолодження</h2>
@@ -354,6 +459,7 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
       </div>
       <div class="table-wrap" id="tableView" hidden></div>
     </section>
+    </div>
   </div>
 
   <div id="tab-settings" hidden>
@@ -396,7 +502,7 @@ const SPARKS = [
   { key: 'battery_voltage_v', name: 'Батарея', unit: 'В', digits: 1, color: 'var(--battery)' },
   { key: 'grid_voltage_v', name: 'Мережа', unit: 'В', digits: 0, color: 'var(--grid)' },
 ];
-const THEMES = ['flow', 'gauges', 'tiles'];
+const THEMES = ['flow', 'gauges', 'tiles', 'panel'];
 const PV_MAX_W = 5000;  // maximum PV input of the J4000HC, the full scale of the panels gauge
 const STALE_AFTER = 20; // seconds without a reading before the link is shown as down
 const FLOW_MIN_W = 5;   // below this a flow line stays idle
@@ -469,6 +575,22 @@ function renderFlow() {
   $('gLoadPct').textContent = fmt(d.load_pct) + ' % інвертора';
   $('gPvW').textContent = fmt(d.pv_power_w) + ' Вт';
   $('gPv').setAttribute('stroke-dasharray', arc(d.pv_power_w / PV_MAX_W * 100));
+
+  // panel theme: same rules as the flow diagram, the battery line runs backwards when it discharges
+  const discharging = d.mode === 'Від батареї' && d.out_power_w >= FLOW_MIN_W;
+  const charging = d.mode === 'Від мережі' && d.battery_current_a > 0;
+  $('pPvW').textContent = fmt(d.pv_power_w) + ' Вт';
+  $('pGridV').textContent = gridOn ? fmt(d.grid_voltage_v) + ' В' : 'Немає';
+  $('pBattW').textContent = fmt(d.battery_power_w) + ' Вт';
+  $('pSoc').textContent = fmt(d.battery_soc_pct) + ' % · ' + fmt(d.battery_voltage_v, 1) + ' В';
+  $('pLoadW').textContent = fmt(d.out_power_w) + ' Вт';
+  $('pMode').textContent = d.mode || '';
+  $('pNodePv').classList.toggle('on', setFlow('pFlowPv', d.pv_power_w));
+  $('pNodeLoad').classList.toggle('on', setFlow('pFlowLoad', d.out_power_w));
+  $('pNodeGrid').classList.toggle('on', gridOn);
+  $('pFlowGrid').classList.toggle('on', gridOn && d.mode === 'Від мережі');
+  setFlow('pFlowBatt', charging || discharging ? Math.max(Math.abs(d.battery_power_w || 0), FLOW_MIN_W) : 0);
+  $('pFlowBatt').classList.toggle('rev', discharging);
   renderSparks();
 }
 
