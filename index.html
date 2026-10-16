@@ -22,6 +22,7 @@
   --battery: #35d6a5;  --battery-line: #199e70;
   --load: #a78bfa;     --load-line: #8f72f0;
   --grid: #5aa9ff;
+  --heat: #ff8a5c;     --heat-line: #e2683b;
   --critical: #ef5b5b;
   --axis: #3a444f;
   --on-accent: #06261c;
@@ -40,7 +41,7 @@
   --page: #eef1f5; --surface: #ffffff; --raised: #f1f4f8; --line: #dfe4ea; --axis: #c3ccd6;
   --text: #10161d; --text-2: #47525e; --muted: #7a8694;
   --pv: #c98500; --battery: #17a371; --battery-line: #17a371; --load: #6d4fd8; --load-line: #6d4fd8;
-  --grid: #2a78d6; --critical: #d03b3b; --on-accent: #ffffff;
+  --grid: #2a78d6; --heat: #d9572a; --heat-line: #d9572a; --critical: #d03b3b; --on-accent: #ffffff;
   --shadow: 0 8px 24px rgba(16, 22, 29, 0.14);
 }
 * { box-sizing: border-box; }
@@ -137,6 +138,18 @@ h2 { margin: 0; font: 500 13px var(--display); letter-spacing: 0.02em; }
 .readings dt { color: var(--muted); font-size: 12px; }
 .readings dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; }
 
+/* cooling */
+.cooling { margin-bottom: 12px; }
+.cool { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px 28px; margin: 14px 0 18px; }
+@media (max-width: 760px) { .cool { grid-template-columns: 1fr; } }
+.fans { display: flex; flex-direction: column; gap: 10px; }
+.bar.fan i { background: var(--grid); }
+.fan-row { display: flex; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: 14px; }
+.fan-row b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.fan-row b.bad { color: var(--critical); }
+.fan-row b.idle { color: var(--muted); font-weight: 400; }
+.plot.small svg { height: 220px; }
+
 /* chart */
 .chart-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; margin-bottom: 14px; }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -158,7 +171,7 @@ h2 { margin: 0; font: 500 13px var(--display); letter-spacing: 0.02em; }
 .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .tip { position: absolute; top: 8px; pointer-events: none; min-width: 180px; padding: 10px 12px; background: var(--raised); border-radius: 12px; box-shadow: var(--shadow); font-size: 13px; }
 .tip .time { color: var(--text-2); margin-bottom: 4px; }
-.tip .row { display: flex; align-items: center; gap: 7px; }
+.tip .row { display: flex; align-items: center; gap: 7px; padding: 1px 0; min-height: 0; border: 0; }
 .tip .row i { width: 8px; height: 8px; border-radius: 50%; }
 .tip .row b { margin-left: auto; padding-left: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .table-wrap { max-height: 280px; overflow: auto; }
@@ -296,6 +309,28 @@ th { position: sticky; top: 0; background: var(--surface); color: var(--muted); 
       </div>
     </section>
 
+    <section class="card cooling">
+      <div class="chart-head">
+        <h2>Охолодження</h2>
+        <span class="lock" id="coolAge">Чекаю на дані від інвертора</span>
+      </div>
+      <div class="cool">
+        <div class="fans">
+          <div class="bar-head"><span>Оберти вентиляторів</span><b><span id="fanPct">—</span> %</b></div>
+          <div class="bar fan"><i id="fanBar"></i></div>
+          <div class="fan-row"><span>Вентилятор 1 · датчик <span id="fan1Speed">—</span></span><b id="fan1State">—</b></div>
+          <div class="fan-row"><span>Вентилятор 2 · датчик <span id="fan2Speed">—</span></span><b id="fan2State">—</b></div>
+        </div>
+        <dl class="readings" id="temps"></dl>
+      </div>
+      <div class="legend" id="coolLegend"></div>
+      <div class="plot small">
+        <svg id="coolSvg" role="img" aria-label="Графік температур і обертів вентиляторів"></svg>
+        <div class="empty" id="coolEmpty" hidden>За цей період даних про охолодження ще немає</div>
+        <div class="tip" id="coolTip" hidden></div>
+      </div>
+    </section>
+
     <section class="card">
       <div class="chart-head">
         <h2>Потужність, Вт</h2>
@@ -333,6 +368,20 @@ const SERIES = [
   { key: 'pv_power_w', name: 'Панелі', color: 'var(--pv-line)' },
   { key: 'battery_power_w', name: 'Батарея', color: 'var(--battery-line)' },
 ];
+const COOL_SERIES = [
+  { key: 'temp_charger_c', name: 'Зарядний пристрій', unit: '°C', color: 'var(--heat-line)' },
+  { key: 'temp_pv_c', name: 'Сторона панелей', unit: '°C', color: 'var(--pv-line)' },
+  { key: 'temp_ambient_c', name: 'Навколишня', unit: '°C', color: 'var(--load-line)' },
+  { key: 'fan_pct', name: 'Оберти', unit: '%', color: 'var(--grid)' },
+];
+const TEMPS = [
+  { key: 'temperature_c', name: 'Інвертор' },
+  { key: 'temp_charger_c', name: 'Зарядний пристрій' },
+  { key: 'temp_pv_c', name: 'Сторона панелей' },
+  { key: 'temp_ambient_c', name: 'Навколишня' },
+  { key: 'temp_mppt1_c', name: 'MPPT 1', optional: true },  // 0 on units without these sensors
+  { key: 'temp_mppt2_c', name: 'MPPT 2', optional: true },
+];
 const GROUPS = [
   ['Режими', ['output_priority', 'output_mode', 'charging_priority', 'battery_type', 'charging_method']],
   ['Заряд', ['max_charging_current', 'utility_charging_current', 'cv_voltage', 'float_voltage', 'cv_time', 'cc_max_time']],
@@ -354,12 +403,14 @@ const FLOW_MIN_W = 5;   // below this a flow line stays idle
 const RING = 2 * Math.PI * 80;
 
 const $ = id => document.getElementById(id);
-const svg = $('svg'), tip = $('tip');
+const CHARTS = [
+  { svg: $('svg'), tip: $('tip'), empty: $('empty'), series: SERIES.map(s => ({ ...s, unit: 'Вт' })), geom: null },
+  { svg: $('coolSvg'), tip: $('coolTip'), empty: $('coolEmpty'), series: COOL_SERIES, geom: null },
+];
 const store = { get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
 let minutes = Number(store.get('minutes')) || 60;
 let rows = [];
 let latest = {};
-let geom = null;
 let settings = [];
 let editing = null; // key of the setting being edited; pauses re-rendering of the list
 let live = false;   // WebSocket is open
@@ -468,6 +519,7 @@ function applyReading(data) {
     if (v != null) el.textContent = typeof v === 'string' ? v : fmt(v, Number(el.dataset.d));
   });
   renderFlow();
+  renderCooling();
   renderLink();
 }
 
@@ -505,15 +557,19 @@ function niceStep(span, count) {
 }
 
 function renderChart() {
-  const W = svg.clientWidth, H = svg.clientHeight;
-  if (!W) return; // overview tab is hidden
+  CHARTS.forEach(drawChart);
+}
+
+function drawChart(c) {
+  const svg = c.svg, W = svg.clientWidth, H = svg.clientHeight;
+  if (!W) return; // overview tab or this view is hidden
   const m = { l: 48, r: 12, t: 10, b: 26 };
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  $('empty').hidden = rows.length > 0;
-  if (!rows.length) { svg.innerHTML = ''; geom = null; return; }
+  const values = rows.flatMap(r => c.series.map(s => r[s.key]).filter(v => v != null));
+  c.empty.hidden = values.length > 0;
+  if (!values.length) { svg.innerHTML = ''; c.geom = null; return; }
 
   const now = Date.now() / 1000, t0 = now - minutes * 60;
-  const values = rows.flatMap(r => SERIES.map(s => r[s.key]).filter(v => v != null));
   const step = niceStep(Math.max(Math.max(0, ...values) - Math.min(0, ...values), 10), 4);
   const yMin = Math.floor(Math.min(0, ...values) / step) * step;
   const yMax = Math.max(Math.ceil(Math.max(0, ...values) / step) * step, yMin + step);
@@ -525,23 +581,24 @@ function renderChart() {
     out += `<line class="${v === 0 ? 'baseline' : 'gridline'}" x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}"/>`;
     out += `<text x="${m.l - 8}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`;
   }
-  for (let i = 0; i <= 5; i++) {
-    const ts = t0 + i * minutes / 5 * 60;
-    out += `<text x="${x(ts)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === 5 ? 'end' : 'middle'}">${clock(ts)}</text>`;
+  const ticks = W < 520 ? 3 : 5; // time labels overlap on a phone otherwise
+  for (let i = 0; i <= ticks; i++) {
+    const ts = t0 + i * minutes / ticks * 60;
+    out += `<text x="${x(ts)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}">${clock(ts)}</text>`;
   }
   // break the line where the logger was offline instead of drawing across the gap
   const gap = Math.max(minutes * 60 / 600, 5) * 4;
-  for (const s of SERIES) {
+  for (const s of c.series) {
     let d = '', prev = null;
     for (const r of rows) {
       if (r[s.key] == null) continue;
       d += (prev == null || r.ts - prev > gap ? 'M' : 'L') + x(r.ts).toFixed(1) + ' ' + y(r[s.key]).toFixed(1);
       prev = r.ts;
     }
-    out += `<path class="line" style="stroke:${s.color}" d="${d}"/>`;
+    if (d) out += `<path class="line" style="stroke:${s.color}" d="${d}"/>`;
   }
-  svg.innerHTML = out + '<g id="hover"></g>';
-  geom = { x, y, W, H, m };
+  svg.innerHTML = out + '<g class="hover"></g>';
+  c.geom = { x, y, W, H, m };
 }
 
 function renderTable() {
@@ -551,27 +608,52 @@ function renderTable() {
   $('tableView').innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 
-function onHover(ev) {
-  if (!geom || !rows.length) return;
-  const px = ev.clientX - svg.getBoundingClientRect().left;
-  let best = rows[0];
-  for (const r of rows) if (Math.abs(geom.x(r.ts) - px) < Math.abs(geom.x(best.ts) - px)) best = r;
-  const bx = geom.x(best.ts);
-  svg.querySelector('#hover').innerHTML =
-    `<line class="cross" x1="${bx}" x2="${bx}" y1="${geom.m.t}" y2="${geom.H - geom.m.b}"/>` +
-    SERIES.filter(s => best[s.key] != null).map(s =>
-      `<circle class="dot" r="4" cx="${bx}" cy="${geom.y(best[s.key])}" style="fill:${s.color}"/>`).join('');
-  tip.innerHTML = `<div class="time">${clock(best.ts, true)}</div>` + SERIES.map(s =>
-    `<div class="row"><i style="background:${s.color}"></i>${s.name}<b>${fmt(best[s.key])} Вт</b></div>`).join('');
-  tip.hidden = false;
-  const left = bx + 14 + tip.offsetWidth > geom.W ? bx - 14 - tip.offsetWidth : bx + 14;
-  tip.style.left = Math.max(0, left) + 'px';
+function onHover(c, ev) {
+  const shown = rows.filter(r => c.series.some(s => r[s.key] != null));
+  if (!c.geom || !shown.length) return;
+  const px = ev.clientX - c.svg.getBoundingClientRect().left;
+  let best = shown[0];
+  for (const r of shown) if (Math.abs(c.geom.x(r.ts) - px) < Math.abs(c.geom.x(best.ts) - px)) best = r;
+  const bx = c.geom.x(best.ts);
+  c.svg.querySelector('.hover').innerHTML =
+    `<line class="cross" x1="${bx}" x2="${bx}" y1="${c.geom.m.t}" y2="${c.geom.H - c.geom.m.b}"/>` +
+    c.series.filter(s => best[s.key] != null).map(s =>
+      `<circle class="dot" r="4" cx="${bx}" cy="${c.geom.y(best[s.key])}" style="fill:${s.color}"/>`).join('');
+  c.tip.innerHTML = `<div class="time">${clock(best.ts, true)}</div>` + c.series.map(s =>
+    `<div class="row"><i style="background:${s.color}"></i>${s.name}<b>${fmt(best[s.key])} ${s.unit}</b></div>`).join('');
+  c.tip.hidden = false;
+  const left = bx + 14 + c.tip.offsetWidth > c.geom.W ? bx - 14 - c.tip.offsetWidth : bx + 14;
+  c.tip.style.left = Math.max(0, left) + 'px';
 }
 
-function clearHover() {
-  tip.hidden = true;
-  const g = svg.querySelector('#hover');
+function clearHover(c) {
+  c.tip.hidden = true;
+  const g = c.svg.querySelector('.hover');
   if (g) g.innerHTML = '';
+}
+
+function fanState(stopped, pct) {
+  if (stopped == null) return ['—', ''];
+  if (!stopped) return ['працює', ''];
+  // stopped while the inverter asks for airflow points at a stuck or failed fan
+  return pct > 0 ? ['зупинений', 'bad'] : ['стоїть', 'idle'];
+}
+
+function renderCooling() {
+  const d = latest;
+  const has = d.fan_pct != null || d.temp_charger_c != null;
+  $('coolAge').textContent = has ? 'Оновлюється приблизно раз на пів хвилини' : 'Чекаю на дані від інвертора';
+  $('fanPct').textContent = fmt(d.fan_pct);
+  $('fanBar').style.width = Math.min(d.fan_pct || 0, 100) + '%';
+  $('fan1Speed').textContent = fmt(d.fan1_speed);
+  $('fan2Speed').textContent = fmt(d.fan2_speed);
+  for (const n of [1, 2]) {
+    const [text, cls] = fanState(d[`fan${n}_stopped`], d.fan_pct);
+    $(`fan${n}State`).textContent = text;
+    $(`fan${n}State`).className = cls;
+  }
+  $('temps').innerHTML = TEMPS.filter(t => !(t.optional && !d[t.key]))
+    .map(t => `<div><dt>${t.name}</dt><dd>${fmt(d[t.key])} °C</dd></div>`).join('');
 }
 
 async function refreshSettings() {
@@ -667,11 +749,15 @@ $('viewToggle').addEventListener('click', () => {
   $('viewToggle').textContent = table ? 'Графік' : 'Таблиця';
   if (!table) renderChart();
 });
-svg.addEventListener('pointermove', onHover);
-svg.addEventListener('pointerleave', clearHover);
+for (const c of CHARTS) {
+  c.svg.addEventListener('pointermove', ev => onHover(c, ev));
+  c.svg.addEventListener('pointerleave', () => clearHover(c));
+}
 window.addEventListener('resize', renderChart);
 
 $('legend').innerHTML = SERIES.map(s => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join('');
+$('coolLegend').innerHTML = COOL_SERIES.map(s => `<span><i style="background:${s.color}"></i>${s.name}, ${s.unit}</span>`).join('');
+renderCooling();
 // ?theme=gauges in the address picks a theme for this device, e.g. a wall-mounted tablet
 const wanted = new URLSearchParams(location.search).get('theme') || store.get('theme');
 setTheme(THEMES.includes(wanted) ? wanted : 'flow');

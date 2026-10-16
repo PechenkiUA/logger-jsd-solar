@@ -113,11 +113,26 @@ SETTINGS = [
 SETTINGS_BY_KEY = {s['key']: s for s in SETTINGS}
 SETTINGS_EVERY = 3  # poll cycles between two setting reads; one full pass takes a few minutes
 
+# Fans and temperatures change slowly, so they are read every few cycles and attached to every
+# reading in between. Field positions are from ha-eybond-local; the meaning of the fan speed
+# numbers is not documented, they are stored as the inverter reports them.
+THERMAL_COMMANDS = {
+    'FAN???': {0: 'fan_pct', 1: 'fan1_speed', 2: 'fan2_speed', 3: 'fan1_stopped', 4: 'fan2_stopped'},
+    'GTMP': {0: 'temp_pv_c', 1: 'temp_charger_c', 2: 'temp_ambient_c', 3: 'temp_mppt1_c', 4: 'temp_mppt2_c'},
+}
+THERMAL_EVERY = 6      # poll cycles between two reads
+THERMAL_MAX_AGE = 300  # seconds a read stays attached to readings; older values are dropped
+THERMAL_BACKOFF = 600  # seconds before asking again a command the inverter did not answer
+
 WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 WS_TIMEOUT = 5.0  # a browser that stops reading must not stall the polling loop for longer
 ws_clients = {}  # socket -> send lock, for every open dashboard WebSocket
 ws_clients_lock = threading.Lock()
 last_reading = None  # newest stored reading, sent to a dashboard as soon as it connects
+
+thermal = {}         # command -> {'values': {...}, 'ts': time.time() of the reply}
+thermal_skip = {}    # command -> monotonic time until which it is not asked
+thermal_logged = set()  # commands whose raw reply was already logged once since start
 
 last_odd_reply = float('-inf')  # monotonic time of the last logged unparseable GPDAT0 reply
 setting_values = {}  # key -> {'raw': str, 'ts': int}; shared with the dashboard thread
@@ -259,6 +274,38 @@ def read_live(dongle: Dongle) -> dict | None:
         values['battery_power_w'] = round(values['battery_voltage_v'] * values['battery_current_a'])
     if len(fields) > 1:
         values['mode'] = MODES.get(fields[1], fields[1])
+    return values
+
+
+def read_thermal(dongle: Dongle) -> None:
+    """Read fan state and temperatures; a command that gets no usable reply is paused for a while."""
+    for command, fields in THERMAL_COMMANDS.items():
+        if time.monotonic() < thermal_skip.get(command, 0):
+            continue
+        reply = dongle.command(command)
+        parts = (reply or '').split()
+        values = {}
+        for i, name in fields.items():
+            try:
+                values[name] = float(parts[i])
+            except (IndexError, ValueError):
+                pass
+        if not values:
+            thermal_skip[command] = time.monotonic() + THERMAL_BACKOFF
+            log(f'{command}: no usable reply {reply!r}, next try in {THERMAL_BACKOFF // 60} min')
+            continue
+        if command not in thermal_logged:  # the raw reply helps to check what the fields mean
+            thermal_logged.add(command)
+            log(f'{command} reply: {reply!r}')
+        thermal[command] = {'values': values, 'ts': time.time()}
+
+
+def thermal_values() -> dict:
+    now = time.time()
+    values = {}
+    for state in thermal.values():
+        if now - state['ts'] <= THERMAL_MAX_AGE:
+            values.update(state['values'])
     return values
 
 
@@ -520,8 +567,11 @@ def serve(db: sqlite3.Connection, interval: float) -> None:
                             apply_write(dongle, setting, raw, result)
                     finally:
                         done.set()
+                if cycle % THERMAL_EVERY == 1:
+                    read_thermal(dongle)
                 values = read_live(dongle)
                 if values:
+                    values.update(thermal_values())
                     now = int(time.time())
                     db.execute('INSERT INTO readings (ts, data) VALUES (?, ?)', (now, json.dumps(values)))
                     db.commit()
